@@ -60,16 +60,20 @@ class TwoLayer(nn.Module):
         nn.init.normal_(self.fc1.weight, mean=0.0, std=std0w)
         nn.init.normal_(self.fc2.weight, mean=0.0, std=std0v)
 
-    def zs(self, x):
-        # input to hidden
-        x = self.g(self.fc1(x) / math.sqrt(self.N))
-        return x
-
     def forward(self, x):
         # input to hidden
-        x = self.zs(x)
+        x = self.g(self.fc1(x) / math.sqrt(self.N))
         x = self.fc2(x)
         return x
+
+    def nu_y(self, x):
+        """
+        Computes the pre-activation of the teacher.
+        """
+        nu = self.fc1(x) / math.sqrt(self.N)
+        y = self.g(nu)
+        y = self.fc2(y)
+        return nu, y
 
     def freeze(self):
         for param in self.parameters():
@@ -84,9 +88,9 @@ class ScalarResnet(torchvision.models.resnet.ResNet):
             num_classes=num_classes,
             **kwargs
         )
-        self.input_dim = (3, 32, 32)
+        self.input_dim = (1, 32, 32)
         self.num_classes = num_classes
-        self.N = 3072
+        self.N = self.input_dim[0] * self.input_dim[1] * self.input_dim[2]
         self.D = max(self.fc.weight.data.shape)
 
         # Two tricks to get better accuracy, taken from Joost van Amersfoort
