@@ -133,9 +133,26 @@ class ScalarResnet(torchvision.models.resnet.ResNet):
         return x
 
     def forward(self, x):
+        x = self.nu(x)
+        x = erfscaled(x)
+        return x
+
+    def nu(self, x):
+        """
+        Computes the pre-activation of the teacher.
+        """
         x = self.preprocess(x)
         x = self.fc(x / math.sqrt(self.D))
         return x
+
+    def nu_y(self, x):
+        """
+        Computes the pre-activation of the teacher.
+        """
+        nu = self.preprocess(x)
+        nu = self.fc(nu / math.sqrt(self.D))
+        y = erfscaled(nu)
+        return nu, y
 
     def freeze(self):
         """
