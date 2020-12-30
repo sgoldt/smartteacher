@@ -10,6 +10,7 @@ import math
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 import torchvision.models.resnet
 
@@ -36,8 +37,50 @@ def dgdx_erfscaled(x):
     return SQRT2OVERPI * torch.exp(-(x ** 2) / 2)
 
 
-class TwoLayer(nn.Module):
-    def __init__(self, g, N, K, std0w=1, std0v=1):
+class Model(nn.Module):
+    """
+    Abstract class for all the models used in these experiments.
+    """
+
+    def preprocess(self, x):
+        """
+        Applies all the layers to the input before the last fully-connected D->K layer.
+        """
+        pass
+
+    def forward(self, x):
+        """
+        Computes the output of the network.
+        """
+        x = self.nu(x)
+        x = erfscaled(x)
+        x = self.v(x)
+        return x
+
+    def nu(self, x):
+        """
+        Computes the pre-activation at the last hidden layer of neurons of the network.
+        """
+        x = self.preprocess(x)
+        x = self.fc(x / math.sqrt(self.D))
+        return x
+
+    def nu_y(self, x):
+        """
+        Computes the pre-activation of the last hidden layer and the network's output.
+        """
+        nu = self.nu(x)
+        y = erfscaled(nu)
+        y = self.v(y)
+        return nu, y
+
+    def freeze(self):
+        for param in self.parameters():
+            param.requires_grad = False
+
+
+class TwoLayer(Model):
+    def __init__(self, N, K, std0w=None, std0v=None):
         """
         Parameters:
         -----------
@@ -49,38 +92,150 @@ class TwoLayer(nn.Module):
         std0v :
            std dev of the initial SECOND-layer (Gaussian) weights.
         """
-        super(TwoLayer, self).__init__()
+        super().__init__()
         self.N = N
+        self.D = N
         self.K = K
-        self.g = g
+        self.requires_2d_input = False
 
-        self.fc1 = nn.Linear(N, K, bias=False)
-        self.fc2 = nn.Linear(K, 1, bias=False)
+        self.fc = nn.Linear(N, K, bias=False)
+        self.v = nn.Linear(K, 1, bias=False)
 
-        nn.init.normal_(self.fc1.weight, mean=0.0, std=std0w)
-        nn.init.normal_(self.fc2.weight, mean=0.0, std=std0v)
+        if std0w is not None:
+            nn.init.normal_(self.fc.weight, mean=0.0, std=std0w)
+        if std0v is not None:
+            nn.init.normal_(self.v.weight, mean=0.0, std=std0v)
 
-    def forward(self, x):
-        # input to hidden
-        x = self.g(self.fc1(x) / math.sqrt(self.N))
-        x = self.fc2(x)
+    def preprocess(self, x):
         return x
 
-    def nu_y(self, x):
+
+class MLP(Model):
+    def __init__(self, N, K):
         """
-        Computes the pre-activation of the teacher.
+        Parameters:
+        -----------
+
+        N : input dimension
+        K : number of hidden nodes
         """
-        nu = self.fc1(x) / math.sqrt(self.N)
-        y = self.g(nu)
-        y = self.fc2(y)
-        return nu, y
+        super().__init__()
+        self.N = N
+        self.D = N
+        self.K = K
+        self.requires_2d_input = False
 
-    def freeze(self):
-        for param in self.parameters():
-            param.requires_grad = False
+        self.preprocess1 = nn.Linear(N, N, bias=False)
+        self.preprocess2 = nn.Linear(N, N, bias=False)
+        self.preprocess3 = nn.Linear(N, self.D, bias=False)
+
+        # add a batch-norm layer before the last fully connected layer
+        self.bnz = nn.BatchNorm1d(self.D, affine=False, track_running_stats=False)
+
+        self.fc = nn.Linear(self.D, K, bias=False)
+        self.v = nn.Linear(K, 1, bias=False)
+
+        nn.init.normal_(self.fc.weight, mean=0.0, std=1)
+        nn.init.normal_(self.v.weight, mean=0.0, std=1)
+
+    def preprocess(self, x):
+        """
+        Propagates the given inputs x through the MLP until we hit the fully-connected
+        layer that projects things down to the M classes.
+        """
+        x = F.relu(self.preprocess1(x))
+        x = F.relu(self.preprocess2(x)) + x
+        x = F.relu(self.preprocess3(x)) + x
+
+        x = self.bnz(x)  # an additional BatchNorm layer to ensure that z has zero mean
+
+        return x
 
 
-class ScalarResnet(torchvision.models.resnet.ResNet):
+class ConvNet(Model):
+    def __init__(
+        self,
+        g,
+        K,
+        input_size=[1, 32, 32],
+        output_size=10,
+        n_layers=2,
+        kernel_size=3,
+        channels=1,
+        stride=1,
+        padding=0,
+    ):
+        """
+        Parameters:
+        -----------
+
+        N : input dimension
+        K : number of hidden nodes
+        """
+        super().__init__()
+        self.K = K
+        self.g = g
+        self.requires_2d_input = True
+
+        self.input_size = torch.tensor(input_size)
+        self.channels = channels
+
+        self.conv1 = nn.Conv2d(
+            self.input_size[0],
+            channels,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+            bias=False,
+        )
+        new_size = (self.input_size[1:] - kernel_size + 2 * padding) // stride + 1
+        self.conv2 = nn.Conv2d(
+            channels,
+            channels,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+            bias=False,
+        )
+        new_size = (new_size - kernel_size + 2 * padding) // stride + 1
+        self.conv3 = nn.Conv2d(
+            channels,
+            channels,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+            bias=False,
+        )
+        new_size = (new_size - kernel_size + 2 * padding) // stride + 1
+
+        self.D = int(channels * torch.prod(new_size))
+
+        # add a batch-norm layer before the last fully connected layer
+        self.bnz = nn.BatchNorm1d(self.D, affine=False, track_running_stats=False)
+
+        self.fc = nn.Linear(self.D, K, bias=False)
+        self.v = nn.Linear(K, 1, bias=False)
+
+        nn.init.normal_(self.fc.weight, mean=0.0, std=1)
+        nn.init.normal_(self.v.weight, mean=0.0, std=1)
+
+    def preprocess(self, x):
+        """
+        Propagates the given inputs x through the MLP until we hit the fully-connected
+        layer that projects things down to the M classes.
+        """
+        x = F.relu(self.conv1(x))
+        x = F.relu(self.conv2(x))
+        x = F.relu(self.conv3(x))
+
+        x = x.reshape(-1, self.D)
+
+        x = self.bnz(x)  # an additional BatchNorm layer to ensure that z has zero mean
+
+        return x
+
+
+class ScalarResnet(torchvision.models.resnet.ResNet, Model):
     def __init__(self, num_classes, pretrained=False, progress=True, **kwargs):
         super(ScalarResnet, self).__init__(
             torchvision.models.resnet.BasicBlock,
@@ -88,10 +243,13 @@ class ScalarResnet(torchvision.models.resnet.ResNet):
             num_classes=num_classes,
             **kwargs
         )
+        self.requires_2d_input = True
+
         self.input_dim = (1, 32, 32)
         self.num_classes = num_classes
         self.N = self.input_dim[0] * self.input_dim[1] * self.input_dim[2]
         self.D = max(self.fc.weight.data.shape)
+        self.K = 1
 
         # Two tricks to get better accuracy, taken from Joost van Amersfoort
         # https://gist.github.com/y0ast/d91d09565462125a1eb75acc65da1469
@@ -102,10 +260,14 @@ class ScalarResnet(torchvision.models.resnet.ResNet):
 
         # add a batch-norm layer before the last fully connected layer
         self.bnz = nn.BatchNorm1d(self.D, affine=False, track_running_stats=False)
+
         # turn off the bias in the final fully-connected layer
         self.fc.bias = None
-
         nn.init.normal_(self.fc.weight.data, 0, 1)  # ensure the correct scaling here!
+
+        self.v = nn.Linear(self.K, 1, bias=False)
+        nn.init.uniform_(self.v.weight.data, 1)
+        self.v.requires_grad = False  # keep it constant
 
     def preprocess(self, x, block=4):
         """
@@ -135,41 +297,3 @@ class ScalarResnet(torchvision.models.resnet.ResNet):
         x = self.bnz(x)  # an additional BatchNorm layer to ensure that z has zero mean
 
         return x
-
-    def forward(self, x):
-        x = self.nu(x)
-        x = erfscaled(x)
-        return x
-
-    def nu(self, x):
-        """
-        Computes the pre-activation of the teacher.
-        """
-        x = self.preprocess(x)
-        x = self.fc(x / math.sqrt(self.D))
-        return x
-
-    def nu_y(self, x):
-        """
-        Computes the pre-activation of the teacher.
-        """
-        nu = self.preprocess(x)
-        nu = self.fc(nu / math.sqrt(self.D))
-        y = erfscaled(nu)
-        return nu, y
-
-    def freeze(self):
-        """
-        Deactivates automatic differentiation for all parameters.
-
-        Useful when defining a teacher.
-        """
-        for param in self.parameters():
-            param.requires_grad = False
-
-    def unfreeze(self):
-        """
-        Activates automatic differentiation for all parameters.
-        """
-        for param in self.parameters():
-            param.requires_grad = True

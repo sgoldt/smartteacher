@@ -11,12 +11,13 @@
 import argparse
 import math
 
+from tqdm import trange
+
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 
 from dcgan_cifar100 import Generator
-from models import ScalarResnet, TwoLayer
+from models import ScalarResnet, TwoLayer, ConvNet, MLP
 
 
 def I2_erf(c00, c01, c11):
@@ -56,8 +57,6 @@ def get_eg_analytical(Q, R, T, A, v):
 
 
 def eval_student(time, teacher, student, test_loader, test_xs, test_nus, device):
-    # N = test_xs.shape[1]
-
     student.eval()
     with torch.no_grad():
         # compute the generalisation error w.r.t. the noiseless teacher
@@ -75,57 +74,106 @@ def eval_student(time, teacher, student, test_loader, test_xs, test_nus, device)
         eg /= len(test_loader)
 
         P = test_xs.shape[0]
-        w = student.fc1.weight.data.cpu()
-        v = student.fc2.weight.data.cpu()
-        if isinstance(teacher, TwoLayer):
-            A = teacher.fc2.weight.data.cpu()
-        else:
-            A = torch.tensor([1]).float()
+        w = student.fc.weight.data.cpu()
+        v = student.v.weight.data.cpu()
+        A = teacher.v.weight.data.cpu()
+
+        # Calculate the test error using an analytical formula assuming joint Gaussianity
+        # of (lambda, nu)
         lambdas = test_xs @ w.T / math.sqrt(student.N)
         # nus are given to this method
         Q_mc = lambdas.T @ lambdas / P
         R_mc = lambdas.T @ test_nus / P
         T_mc = test_nus.T @ test_nus / P
         eg_analytical = 2 * get_eg_analytical(Q_mc, R_mc, T_mc, A, v)
+
+        # Monte Carlo calculation, essentially checking that we have the right variables
+        # nu and lambda.
         gnus = erfscaled(test_nus)
         glambdas = erfscaled(lambdas)
-        eg_mc = torch.sum((A.T @ A) * (gnus.T @ gnus / P))
-        eg_mc += torch.sum((v.T @ v) * (glambdas.T @ glambdas / P))
-        eg_mc -= 2 * torch.sum((A.T @ v) * (gnus.T @ glambdas / P))
-        msg = "%g, %g, %g, %g, %g, " % (time, eg, eg_mc, eg_analytical, student_std)
+        # eg_mc = torch.sum((A.T @ A) * (gnus.T @ gnus / P))
+        # eg_mc += torch.sum((v.T @ v) * (glambdas.T @ glambdas / P))
+        # eg_mc -= 2 * torch.sum((A.T @ v) * (gnus.T @ glambdas / P))
+        # msg = ("%g, %g, %g, %g, %g, " % (time, eg, eg_mc, eg_analytical, student_std))
+
+        sqrtQ = torch.sqrt(1 + Q_mc.diag())
+        norm = torch.ger(sqrtQ, sqrtQ)
+        q_term = 2 / math.pi * torch.sum((v.t() @ v) * torch.asin(Q_mc / norm))
+        # teacher-teacher overlaps
+        sqrtT = torch.sqrt(1 + T_mc.diag())
+        norm = torch.ger(sqrtT, sqrtT)
+        t_term = 2 / math.pi * torch.sum((A.t() @ A) * torch.asin(T_mc / norm))
+        # student-teacher overlaps
+        norm = torch.ger(sqrtQ, sqrtT)
+        r_term = 2 / math.pi * torch.sum((v.t() @ A) * torch.asin(R_mc / norm))
+
+        q_term_mc = torch.sum((v.T @ v) * (glambdas.T @ glambdas / P))
+        r_term_mc = torch.sum((A.T @ v) * (gnus.T @ glambdas / P))
+        t_term_mc = torch.sum((A.T @ A) * (gnus.T @ gnus / P))
+
+        msg = ("%g, %g, %g, %g, %g, %g, %g, " % (time, q_term, r_term, t_term, q_term_mc, r_term_mc, t_term_mc))
 
     student.train()
     return msg[:-2]
 
 
-def get_samples(P, D, N, generator, teacher, device):
+def _get_samples_dcgan(P, D, N, generator, teacher, mean_x, device):
     """
     Generates a set of test samples.
 
     Parameters:
     -----------
 
-    scenario : string describing the scenario, e.g. dcgan_rand, nvp_cifar10, ...
     P : number of samples
     D : latent dimension
     N : input dimension
     generator : generative model that transforms latent variables to inputs
     teacher : teacher networks
+    mean_x : the mean of the generator's output
     """
     with torch.no_grad():
         cs = torch.randn(P, D).to(device)
         latent = cs.unsqueeze(-1).unsqueeze(-1)
         xs = generator(latent)
-        if isinstance(teacher, TwoLayer):
-            xs = xs.reshape(-1, N)
-            nus, ys = teacher.nu_y(xs)
-        else:
+        if teacher.requires_2d_input:
             # let the teacher act on the 2-D images
             nus, ys = teacher.nu_y(xs)
             xs = xs.reshape(-1, N)
+            xs -= mean_x
+        else:
+            xs = xs.reshape(-1, N)
+            xs -= mean_x
+            nus, ys = teacher.nu_y(xs)
 
         return cs, xs, nus, ys
 
+
+def _get_samples_iid(P, D, N, generator, teacher, mean_x, device):
+    """
+    Generates a set of test samples.
+
+    Parameters:
+    -----------
+
+    P : number of samples
+    D : latent dimension
+    N : input dimension
+    generator : generative model that transforms latent variables to inputs
+    teacher : teacher networks
+    mean_x : the mean of the generator's output
+    """
+    with torch.no_grad():
+        xs = torch.randn(P, N).to(device)
+        if teacher.requires_2d_input:
+            # let the teacher act on the 2-D images
+            xs = xs.reshape(-1, 1, 32, 32)
+            nus, ys = teacher.nu_y(xs)
+            xs = xs.reshape(-1, N)
+        else:
+            xs = xs.reshape(-1, N)
+            nus, ys = teacher.nu_y(xs)
+
+        return None, xs, nus, ys
 
 def log(msg, logfile):
     """
@@ -141,14 +189,16 @@ def main():
     This is online learning, batch size=1. The batch-size this parameter sets is simply
     the number of samples that are generated or labeled on the GPU in one go.
     """
+    teachers = "twolayer | mlp | convnet | resnet18rand"
+    generators = "iid | dcgan_rand | dcgan_cifar100_grey"
     device_help = "which device to run on: 'cuda' or 'cpu'"
     steps_help = "number of epochs to train (default: 50)"
     lr_help = "learning rate (default: 0.05)"
     seed_help = "random number generator seed."
     parser = argparse.ArgumentParser()
-    parser.add_argument("--teacher", default="twolayer", help="twolayer | resnet18rand")
+    parser.add_argument("--teacher", default="twolayer", help=teachers)
     parser.add_argument(
-        "--randomgen", help="random teacher weights", action="store_true"
+        "--generator", default="dcgan_cifar100_grey", help=generators
     )
     parser.add_argument("--K", type=int, default=2, help=steps_help)
     parser.add_argument("--lr", type=float, default=0.01, help=lr_help)
@@ -168,30 +218,52 @@ def main():
 
     # D: generator input dimension
     # N: generator output dimension, student input
-    (D, N, M, K, lr, seed) = (100, 32 * 32, 1, args.K, args.lr, args.seed)
+    (D, N, M, K, lr, seed) = (100, 1 * 32 * 32, 1, args.K, args.lr, args.seed)
 
     # initialise the student to guarantee the random weights for the given seed
-    student = TwoLayer(erfscaled, N, args.K, std0w=1).to(device)
+    student = TwoLayer(N, args.K, std0w=1e-1, std0v=1e-2).to(device)
 
     welcome = "# Checking the GEP for (x=DCGAN, y=Resnet18) on CIFAR10\n"
     welcome += "# Using device: %s\n" % str(device)
 
     # generator
-    generator = Generator(ngpu=1)
-    # load weights
-    if not args.randomgen:
-        loadweightsfrom = "models/dcgan_cifar100_grey_weights.pth"
-        welcome += "# Loaded pre-trained generator weights from %s\n" % loadweightsfrom
+    generator = None
+    get_samples = None
+    # the vectorial mean of the student inputs
+    # (i.e. mean_x is a vector, not a quadratic image!)
+    mean_x = None
+    if args.generator.startswith("dcgan"):
+        generator = Generator(ngpu=1)
+        get_samples = _get_samples_dcgan
+
+        # find the right weights
+        loadweightsfrom = "models/%s_weights.pth" % args.generator
         generator.load_state_dict(torch.load(loadweightsfrom, map_location=device))
-    generator.eval()
-    generator.to(device)
+        welcome += "# Loaded generator weights from %s\n" % loadweightsfrom
+    elif args.generator == "iid":
+        get_samples = _get_samples_iid
+    else:
+        raise ValueError("Wrong generator name (%s)" % generators)
+
+    if generator is None:
+        mean_x = torch.zeros(N)
+    else:
+        generator.eval()
+        generator.to(device)
+        mean_x = torch.load("models/%s_mean_x.pth" % args.generator)
 
     # teacher
     num_classes = 1  # odd-even discrimination
     M = None
     if args.teacher == "twolayer":
         M = 2 * args.K
-        teacher = TwoLayer(erfscaled, N, M, std0w=1).to(device)
+        teacher = TwoLayer(N, M, std0w=1, std0v=1).to(device)
+    elif args.teacher == "mlp":
+        M = 2 * args.K
+        teacher = MLP(N, M).to(device)
+    elif args.teacher == "convnet":
+        M = 2 * args.K
+        teacher = ConvNet(erfscaled, M).to(device)
     elif args.teacher == "resnet18rand":
         M = 1
         teacher = ScalarResnet(num_classes, False, False).to(device)
@@ -210,8 +282,7 @@ def main():
     teacher.eval()
 
     # output file + welcome message
-    gen_desc = "dcgan_cifar100" + ("rand" if args.randomgen else "")
-    fname_root = "%s_%s_K%d_lr%g_s%d" % (gen_desc, args.teacher, K, lr, seed)
+    fname_root = "%s_%s_K%d_lr%g_s%d" % (args.generator, args.teacher, K, lr, seed)
     logfile = open(fname_root + ".log", "w", buffering=1)
     welcome += "# Teacher and Student:"
     for net in [teacher, student]:
@@ -220,33 +291,30 @@ def main():
 
     # Generate the test set
     test_bs = 1000  # test batch size
-    batches = 5
-    test_cs = torch.zeros((batches * test_bs, D))
-    test_xs = torch.zeros((batches * test_bs, 1 * 32 * 32))
-    test_nus = torch.zeros((batches * test_bs, M))
-    test_ys = torch.zeros((batches * test_bs, 1))
+    batches = 1
+    P = batches * test_bs
+    test_cs = torch.zeros((P, D))
+    test_xs = torch.zeros((P, N))
+    test_nus = torch.zeros((P, M))
+    test_ys = torch.zeros((P, 1))
     print("# Generating test set")
-    for idx in range(batches):
+    for idx in trange(batches):
         cs, xs, nus, ys = get_samples(
             test_bs,
             D,
             N,
             generator,
             teacher,
+            mean_x,
             device,
         )
-        start = idx * cs.shape[0]
-        end = (idx + 1) * cs.shape[0]
-        test_cs[start:end] = cs
+        start = idx * xs.shape[0]
+        end = (idx + 1) * xs.shape[0]
+        if cs is not None:
+            test_cs[start:end] = cs
         test_xs[start:end] = xs
         test_nus[start:end] = nus
         test_ys[start:end] = ys
-
-    # Center the inputs, rescale (these two scalar operations do *not* change the input
-    # distribution; they merely amount to choosing the origin and setting the unit
-    # length in input space).
-    mean, std = torch.mean(test_xs), torch.std(test_xs)
-    test_xs = (test_xs - mean) / std
 
     test_dataset = torch.utils.data.TensorDataset(test_xs, test_ys)
     test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=test_bs)
@@ -263,7 +331,6 @@ def main():
     log(msg, logfile)
 
     optimizer = torch.optim.SGD(student.parameters(), lr=args.lr)
-    criterion = nn.MSELoss()
 
     # when to print?
     end = torch.log10(torch.tensor([1.0 * args.steps])).item()
@@ -282,6 +349,7 @@ def main():
             N,
             generator,
             teacher,
+            mean_x,
             device,
         )
 
