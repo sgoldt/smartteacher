@@ -50,41 +50,47 @@ def explicit_forward(student, Ds, inputs):
 class ScalarResnetTests(unittest.TestCase):
     def test_outputs_using_preprocess(self):
         bs = 4
-        K = 3
+        num_classes = 1
 
-        student = ScalarResnet(K, pretrained=False, progress=True)
+        student = ScalarResnet(num_classes)
 
         with torch.no_grad():
             xs = torch.randn((bs,) + student.input_dim)
+            print("Calling student")
             ys = student(xs)
 
-            zs = student.preprocess(xs)
             w = student.fc.weight.data
-            lambdas = w @ zs.T / math.sqrt(w.shape[1])
-            explicit_ys = lambdas
+            v = student.v.weight.data
 
-        self.assertTrue(torch.allclose(ys, explicit_ys.T))
+            zs = student.preprocess(xs)
+            lambdas = w @ zs.T / math.sqrt(student.D)
+            glambdas = erfscaled(lambdas)
+            explicit_ys = v @ glambdas
+
+        diff = torch.sum((ys - explicit_ys.T)**2) / torch.sum(ys**2)
+        self.assertTrue(diff.item() < 1e-6)
 
     def test_preprocess_block0(self):
         bs = 128
-        K = 3
+        num_classes = 1
 
-        student = ScalarResnet(K, pretrained=False, progress=True)
+        student = ScalarResnet(num_classes)
 
         with torch.no_grad():
             xs = torch.randn((bs,) + student.input_dim)
             zs = student.preprocess(xs, 0)
 
-            xs = student.conv1(xs)
-            xs = student.bn1(xs)
-            xs = student.relu(xs)
-            xs = student.maxpool(xs)
+            # I know, I know, this is testing internal logic...
+            xs = student._resnet.conv1(xs)
+            xs = student._resnet.bn1(xs)
+            xs = student._resnet.relu(xs)
+            xs = student._resnet.maxpool(xs)
             # x = self.layer1(x)
             # x = self.layer2(x)
             # x = self.layer3(x)
             # x = self.layer4(x)
 
-            xs = student.avgpool(xs)
+            xs = student._resnet.avgpool(xs)
             xs = torch.flatten(xs, 1)
 
             xs = student.bnz(
@@ -97,24 +103,25 @@ class ScalarResnetTests(unittest.TestCase):
 
     def test_preprocess_block1(self):
         bs = 128
-        K = 3
+        num_classes = 3
 
-        student = ScalarResnet(K, pretrained=False, progress=True)
+        student = ScalarResnet(num_classes)
 
         with torch.no_grad():
             xs = torch.randn((bs,) + student.input_dim)
             zs = student.preprocess(xs, 1)
 
-            xs = student.conv1(xs)
-            xs = student.bn1(xs)
-            xs = student.relu(xs)
-            xs = student.maxpool(xs)
-            xs = student.layer1(xs)
+            # I know, I know, this is testing internal logic...
+            xs = student._resnet.conv1(xs)
+            xs = student._resnet.bn1(xs)
+            xs = student._resnet.relu(xs)
+            xs = student._resnet.maxpool(xs)
+            xs = student._resnet.layer1(xs)
             # x = self.layer2(x)
             # x = self.layer3(x)
             # x = self.layer4(x)
 
-            xs = student.avgpool(xs)
+            xs = student._resnet.avgpool(xs)
             xs = torch.flatten(xs, 1)
 
             xs = student.bnz(
@@ -127,24 +134,25 @@ class ScalarResnetTests(unittest.TestCase):
 
     def test_preprocess_block3(self):
         bs = 128
-        K = 3
+        num_classes = 3
 
-        student = ScalarResnet(K, pretrained=False, progress=True)
+        student = ScalarResnet(num_classes)
 
         with torch.no_grad():
             xs = torch.randn((bs,) + student.input_dim)
             zs = student.preprocess(xs, 3)
 
-            xs = student.conv1(xs)
-            xs = student.bn1(xs)
-            xs = student.relu(xs)
-            xs = student.maxpool(xs)
-            xs = student.layer1(xs)
-            xs = student.layer2(xs)
-            xs = student.layer3(xs)
+            # I know, I know, this is testing internal logic...
+            xs = student._resnet.conv1(xs)
+            xs = student._resnet.bn1(xs)
+            xs = student._resnet.relu(xs)
+            xs = student._resnet.maxpool(xs)
+            xs = student._resnet.layer1(xs)
+            xs = student._resnet.layer2(xs)
+            xs = student._resnet.layer3(xs)
             # x = self.layer4(x)
 
-            xs = student.avgpool(xs)
+            xs = student._resnet.avgpool(xs)
             xs = torch.flatten(xs, 1)
 
             xs = student.bnz(
