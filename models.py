@@ -45,14 +45,15 @@ class Model(nn.Module, metaclass=ABCMeta):
     @property
     @abstractmethod
     def requires_2d_input(self):
-        pass
+        """
+        True if the network requires inputs as 2D arrays (images).
+        """
 
     @abstractmethod
     def preprocess(self, x):
         """
         Applies all the layers to the input before the last fully-connected D->K layer.
         """
-        pass
 
     def forward(self, x):
         """
@@ -191,8 +192,6 @@ class ConvNet(Model):
         g,
         K,
         input_size=[1, 32, 32],
-        output_size=10,
-        n_layers=2,
         kernel_size=3,
         channels=1,
         stride=1,

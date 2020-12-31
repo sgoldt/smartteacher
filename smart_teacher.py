@@ -62,6 +62,7 @@ def eval_student(time, teacher, student, test_loader, test_xs, test_nus, device)
         # compute the generalisation error w.r.t. the noiseless teacher
         eg = 0
         student_std = 0  # std. dev. of student labels
+        teacher_std = 0
         for data, target in test_loader:
             data = data.to(device)
             target = target.to(device)
@@ -69,8 +70,10 @@ def eval_student(time, teacher, student, test_loader, test_xs, test_nus, device)
             preds = student(data)
             eg += F.mse_loss(preds, target)
             student_std += torch.std(preds)
+            teacher_std += torch.std(target)
 
         student_std /= len(test_loader)
+        teacher_std /= len(test_loader)
         eg /= len(test_loader)
 
         P = test_xs.shape[0]
@@ -89,29 +92,20 @@ def eval_student(time, teacher, student, test_loader, test_xs, test_nus, device)
 
         # Monte Carlo calculation, essentially checking that we have the right variables
         # nu and lambda.
-        gnus = erfscaled(test_nus)
-        glambdas = erfscaled(lambdas)
+        # gnus = erfscaled(test_nus)
+        # glambdas = erfscaled(lambdas)
         # eg_mc = torch.sum((A.T @ A) * (gnus.T @ gnus / P))
         # eg_mc += torch.sum((v.T @ v) * (glambdas.T @ glambdas / P))
         # eg_mc -= 2 * torch.sum((A.T @ v) * (gnus.T @ glambdas / P))
         # msg = ("%g, %g, %g, %g, %g, " % (time, eg, eg_mc, eg_analytical, student_std))
 
-        sqrtQ = torch.sqrt(1 + Q_mc.diag())
-        norm = torch.ger(sqrtQ, sqrtQ)
-        q_term = 2 / math.pi * torch.sum((v.t() @ v) * torch.asin(Q_mc / norm))
-        # teacher-teacher overlaps
-        sqrtT = torch.sqrt(1 + T_mc.diag())
-        norm = torch.ger(sqrtT, sqrtT)
-        t_term = 2 / math.pi * torch.sum((A.t() @ A) * torch.asin(T_mc / norm))
-        # student-teacher overlaps
-        norm = torch.ger(sqrtQ, sqrtT)
-        r_term = 2 / math.pi * torch.sum((v.t() @ A) * torch.asin(R_mc / norm))
-
-        q_term_mc = torch.sum((v.T @ v) * (glambdas.T @ glambdas / P))
-        r_term_mc = torch.sum((A.T @ v) * (gnus.T @ glambdas / P))
-        t_term_mc = torch.sum((A.T @ A) * (gnus.T @ gnus / P))
-
-        msg = ("%g, %g, %g, %g, %g, %g, %g, " % (time, q_term, r_term, t_term, q_term_mc, r_term_mc, t_term_mc))
+        msg = "%g, %g, %g, %g, %g, " % (
+            time,
+            eg,
+            eg_analytical,
+            teacher_std,
+            student_std,
+        )
 
     student.train()
     return msg[:-2]
@@ -175,6 +169,7 @@ def _get_samples_iid(P, D, N, generator, teacher, mean_x, device):
 
         return None, xs, nus, ys
 
+
 def log(msg, logfile):
     """
     Print log message to  stdout and the given logfile.
@@ -197,9 +192,7 @@ def main():
     seed_help = "random number generator seed."
     parser = argparse.ArgumentParser()
     parser.add_argument("--teacher", default="twolayer", help=teachers)
-    parser.add_argument(
-        "--generator", default="dcgan_cifar100_grey", help=generators
-    )
+    parser.add_argument("--generator", default="dcgan_cifar100_grey", help=generators)
     parser.add_argument("--K", type=int, default=2, help=steps_help)
     parser.add_argument("--lr", type=float, default=0.01, help=lr_help)
     parser.add_argument("--bs", type=int, default=4096, help=bs_help)
@@ -266,7 +259,7 @@ def main():
         teacher = ConvNet(erfscaled, M).to(device)
     elif args.teacher == "resnet18rand":
         M = 1
-        teacher = ScalarResnet(num_classes, False, False).to(device)
+        teacher = ScalarResnet(num_classes).to(device)
     elif args.teacher == "resnet18cifar100":
         M = 1
         raise NotImplementedError("pre-trained teacher not yet implemented")
@@ -291,7 +284,7 @@ def main():
 
     # Generate the test set
     test_bs = 1000  # test batch size
-    batches = 1
+    batches = 10
     P = batches * test_bs
     test_cs = torch.zeros((P, D))
     test_xs = torch.zeros((P, N))
