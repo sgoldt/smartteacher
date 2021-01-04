@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Training a scalar ResNet 18 on odd-even CIFAR10, based on a script by
+# Training various teachers on odd-even CIFAR100, based on a script by
 # Joost van Amersfoort (https://gist.github.com/y0ast)
 # https://gist.github.com/y0ast/d91d09565462125a1eb75acc65da1469
 #
@@ -13,56 +13,8 @@ from tqdm import tqdm
 
 import torch
 import torch.nn.functional as F
-from torchvision import datasets, transforms
 
-from models import ScalarResnet
-
-
-def binarise(x):
-    x = 2 * (x % 2) - 1
-    return x
-
-
-def get_CIFAR10(root):
-    """
-    The transforms and corresponding parameters are taken from a script by
-    Joost van Amersfoort (https://gist.github.com/y0ast)
-    https://gist.github.com/y0ast/d91d09565462125a1eb75acc65da1469
-    """
-
-    target_transform = binarise
-
-    train_transform = transforms.Compose(
-        [
-            transforms.RandomCrop(32, padding=4),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
-        ]
-    )
-    train_dataset = datasets.CIFAR10(
-        root,
-        train=True,
-        target_transform=target_transform,
-        transform=train_transform,
-        download=True,
-    )
-
-    test_transform = transforms.Compose(
-        [
-            transforms.ToTensor(),
-            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
-        ]
-    )
-    test_dataset = datasets.CIFAR10(
-        root,
-        train=False,
-        target_transform=target_transform,
-        transform=test_transform,
-        download=True,
-    )
-
-    return train_dataset, test_dataset
+import utils
 
 
 def train(model, train_loader, optimizer, epoch, logfile, device):
@@ -73,6 +25,9 @@ def train(model, train_loader, optimizer, epoch, logfile, device):
     for data, target in tqdm(train_loader):
         data = data.to(device)
         target = target.to(device).unsqueeze(-1)
+
+        if not model.requires_2d_input:
+            data = data.reshape(-1, model.input_dim)
 
         optimizer.zero_grad()
 
@@ -99,6 +54,9 @@ def test(model, test_loader, logfile, device):
         with torch.no_grad():
             data = data.to(device)
             target = target.to(device).unsqueeze(-1)
+
+            if not model.requires_2d_input:
+                data = data.reshape(-1, model.input_dim)
 
             prediction = model(data)
             loss += F.mse_loss(prediction, target.float(), reduction="sum")
@@ -131,9 +89,14 @@ def log(msg, logfile):
 def main():
     parser = argparse.ArgumentParser()
     device_help = "which device to run on: 'cuda' or 'cpu'"
-    parser.add_argument("--device", "-d", help=device_help)
+    parser.add_argument("--teacher", default="twolayer", help=utils.teachers)
+    parser.add_argument("--dataroot", default="~/datasets", help="path to datasets")
+    parser.add_argument("--dataset", default="cifar10", help="cifar10 | cifar100")
     parser.add_argument(
-        "--dataroot", default="~/datasets/cifar10", help="path to CIFAR10"
+        "--grayscale", help="transform images to grayscale", action="store_true"
+    )
+    parser.add_argument(
+        "-M", type=int, default=1, help="teacher hidden nodes M (default=1)"
     )
     parser.add_argument(
         "--epochs", type=int, default=50, help="number of epochs to train (default: 50)"
@@ -141,7 +104,8 @@ def main():
     parser.add_argument(
         "--lr", type=float, default=0.05, help="learning rate (default: 0.05)"
     )
-    parser.add_argument("--seed", type=int, default=1, help="random seed (default: 1)")
+    parser.add_argument("--device", "-d", help=device_help)
+    parser.add_argument("--seed", type=int, default=0, help="random seed (default: 0)")
     args = parser.parse_args()
 
     torch.manual_seed(args.seed)
@@ -150,9 +114,7 @@ def main():
     else:
         device = torch.device(args.device)
 
-    torch.manual_seed(args.seed)
-
-    train_dataset, test_dataset = get_CIFAR10(args.dataroot)
+    train_dataset, test_dataset = utils.get_dataset(args.dataroot, name=args.dataset, grayscale=args.grayscale)
 
     kwargs = {"num_workers": 2, "pin_memory": True}
 
@@ -163,15 +125,21 @@ def main():
         test_dataset, batch_size=2000, shuffle=False, **kwargs
     )
 
-    num_classes = 1  # one output head for odd-even classification
-    model = ScalarResnet(1)
+    N = 32 * 32 * (1 if args.grayscale else 3)
+    M = {"twolayer": args.M, "mlp": args.M, "convnet": args.M, "resnet18": 1}[args.teacher]
+    model = utils.get_teacher(args.teacher, N, M, device=device)
     model = model.to(device)
 
     # output file + welcome message
-    fname_root = "train_scalarresnet18_cifar10_s%d" % (args.seed)
+    dataset_desc = args.dataset + ("_gray" if args.grayscale else "")
+    fname_root = "train_%s_%s_s%d" % (args.teacher, dataset_desc, args.seed)
     logfile = open(fname_root + ".log", "w", buffering=1)
-    welcome = "# Training a scalar Resnet18 on odd-even discrimination for CIFAR10\n"
+    welcome = "# Training a %s on odd-even discrimination on %s\n" % (
+        args.teacher,
+        dataset_desc,
+    )
     welcome += "# Using device:" + str(device) + "; seed=" + str(args.seed)
+    welcome += "\n# " + str(model).replace("\n", "\n# ")
     log(welcome, logfile)
 
     milestones = [25, 40]
@@ -184,12 +152,15 @@ def main():
     )
 
     for epoch in range(1, args.epochs + 1):
-        test(model, test_loader, logfile, device)
         train(model, train_loader, optimizer, epoch, logfile, device)
+        test(model, test_loader, logfile, device)
 
         scheduler.step()
 
-        torch.save(model.state_dict(), "models/scalarresnet18_cifar10_ep%d.pt" % epoch)
+        torch.save(
+            model.state_dict(),
+            "models/%s_%s_ep%d.pt" % (args.teacher, dataset_desc, epoch),
+        )
 
 
 if __name__ == "__main__":

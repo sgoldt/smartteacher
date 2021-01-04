@@ -18,42 +18,7 @@ import torch.nn.functional as F
 
 from dcgan_cifar100 import Generator
 from models import ScalarResnet, TwoLayer, ConvNet, MLP
-
-
-def I2_erf(c00, c01, c11):
-    return 2.0 / math.pi * torch.asin(c01 / (math.sqrt(1 + c00) * math.sqrt(1 + c11)))
-
-
-def erfscaled(x):
-    return torch.erf(x / math.sqrt(2))
-
-
-def get_eg_analytical(Q, R, T, A, v):
-    """
-    Computes the analytical expression for the generalisation error of erf teacher
-    and student with the given order parameters.
-
-    Parameters:
-    -----------
-    Q: student-student overlap
-    R: teacher-student overlap
-    T: teacher-teacher overlap
-    A: teacher second layer weights
-    v: student second layer weights
-    """
-    eg_analytical = 0
-    # student-student overlaps
-    sqrtQ = torch.sqrt(1 + Q.diag())
-    norm = torch.ger(sqrtQ, sqrtQ)
-    eg_analytical += torch.sum((v.t() @ v) * torch.asin(Q / norm))
-    # teacher-teacher overlaps
-    sqrtT = torch.sqrt(1 + T.diag())
-    norm = torch.ger(sqrtT, sqrtT)
-    eg_analytical += torch.sum((A.t() @ A) * torch.asin(T / norm))
-    # student-teacher overlaps
-    norm = torch.ger(sqrtQ, sqrtT)
-    eg_analytical -= 2.0 * torch.sum((v.t() @ A) * torch.asin(R / norm))
-    return eg_analytical / math.pi
+import utils
 
 
 def eval_student(time, teacher, student, test_loader, test_xs, test_nus, device):
@@ -88,7 +53,7 @@ def eval_student(time, teacher, student, test_loader, test_xs, test_nus, device)
         Q_mc = lambdas.T @ lambdas / P
         R_mc = lambdas.T @ test_nus / P
         T_mc = test_nus.T @ test_nus / P
-        eg_analytical = 2 * get_eg_analytical(Q_mc, R_mc, T_mc, A, v)
+        eg_analytical = 2 * utils.get_eg_analytical(Q_mc, R_mc, T_mc, A, v)
 
         # Monte Carlo calculation, essentially checking that we have the right variables
         # nu and lambda.
@@ -184,15 +149,13 @@ def main():
     This is online learning, batch size=1. The batch-size this parameter sets is simply
     the number of samples that are generated or labeled on the GPU in one go.
     """
-    teachers = "twolayer | mlp | convnet | resnet18rand"
-    generators = "iid | dcgan_rand | dcgan_cifar100_grey"
     device_help = "which device to run on: 'cuda' or 'cpu'"
     steps_help = "number of epochs to train (default: 50)"
     lr_help = "learning rate (default: 0.05)"
     seed_help = "random number generator seed."
     parser = argparse.ArgumentParser()
-    parser.add_argument("--teacher", default="twolayer", help=teachers)
-    parser.add_argument("--generator", default="dcgan_cifar100_grey", help=generators)
+    parser.add_argument("--teacher", default="twolayer", help=utils.teachers)
+    parser.add_argument("--generator", default="dcgan_cifar100_grey", help=utils.generators)
     parser.add_argument("--K", type=int, default=2, help=steps_help)
     parser.add_argument("--lr", type=float, default=0.01, help=lr_help)
     parser.add_argument("--bs", type=int, default=4096, help=bs_help)
@@ -216,7 +179,7 @@ def main():
     # initialise the student to guarantee the random weights for the given seed
     student = TwoLayer(N, args.K, std0w=1e-1, std0v=1e-2).to(device)
 
-    welcome = "# Checking the GEP for (x=DCGAN, y=Resnet18) on CIFAR10\n"
+    welcome = "# Checking the GEP for (x=%s, y=%s)\n" % (args.generator, args.teacher)
     welcome += "# Using device: %s\n" % str(device)
 
     # generator
@@ -246,31 +209,9 @@ def main():
         mean_x = torch.load("models/%s_mean_x.pth" % args.generator)
 
     # teacher
-    num_classes = 1  # odd-even discrimination
-    M = None
-    if args.teacher == "twolayer":
-        M = 2 * args.K
-        teacher = TwoLayer(N, M, std0w=1, std0v=1).to(device)
-    elif args.teacher == "mlp":
-        M = 2 * args.K
-        teacher = MLP(N, M).to(device)
-    elif args.teacher == "convnet":
-        M = 2 * args.K
-        teacher = ConvNet(erfscaled, M).to(device)
-    elif args.teacher == "resnet18rand":
-        M = 1
-        teacher = ScalarResnet(num_classes).to(device)
-    elif args.teacher == "resnet18cifar100":
-        M = 1
-        raise NotImplementedError("pre-trained teacher not yet implemented")
-        # teacher.load_state_dict(
-        #     torch.load("./models/resnet18_cifar10.pt", map_location=device)
-        # )
-        # welcome += (
-        #     "# Loaded pre-trained teacher weights from models/resnet18_cifar10.pt"
-        # )
-    else:
-        raise ValueError("Did not recognise the teacher description.")
+    M = {"twolayer": 2 * args.K, "convnet": 2 * args.K, "resnet18": 1}[args.teacher]
+    teacher = utils.get_teacher(args.teacher, N, M, device=device)
+    teacher.to(device)
     teacher.freeze()
     teacher.eval()
 

@@ -42,6 +42,16 @@ class Model(nn.Module, metaclass=ABCMeta):
     """
     Abstract class for all the models used in these experiments.
     """
+
+    _input_dim = None
+
+    @property
+    def input_dim(self):
+        """
+        Input dimension of the network
+        """
+        return self._input_dim
+
     @property
     @abstractmethod
     def requires_2d_input(self):
@@ -89,7 +99,7 @@ class Model(nn.Module, metaclass=ABCMeta):
         """
         Normalises the weight vector of the 'second-layer'.
         """
-        self.v.weight.data /= torch.sqrt(torch.sum(self.v.weight.data**2))
+        self.v.weight.data /= torch.sqrt(torch.sum(self.v.weight.data ** 2))
 
 
 class TwoLayer(Model):
@@ -112,7 +122,7 @@ class TwoLayer(Model):
            std dev of the initial SECOND-layer (Gaussian) weights.
         """
         super().__init__()
-        self.N = N
+        self._input_dim = N
         self.D = N
         self.K = K
 
@@ -146,7 +156,7 @@ class MLP(Model):
         K : number of hidden nodes
         """
         super().__init__()
-        self.N = N
+        self._input_dim = N
         self.D = N
         self.K = K
 
@@ -163,7 +173,6 @@ class MLP(Model):
         nn.init.normal_(self.fc.weight, mean=0.0, std=1)
         nn.init.normal_(self.v.weight, mean=0.0, std=1)
         self._norm_second_layer()
-
 
     def preprocess(self, x):
         """
@@ -191,7 +200,7 @@ class ConvNet(Model):
         self,
         g,
         K,
-        input_size=[1, 32, 32],
+        input_dim=[1, 32, 32],
         kernel_size=3,
         channels=1,
         stride=1,
@@ -208,18 +217,18 @@ class ConvNet(Model):
         self.K = K
         self.g = g
 
-        self.input_size = torch.tensor(input_size)
+        self._input_dim = torch.tensor(input_dim)
         self.channels = channels
 
         self.conv1 = nn.Conv2d(
-            self.input_size[0],
+            self._input_dim[0],
             channels,
             kernel_size=kernel_size,
             stride=stride,
             padding=padding,
             bias=False,
         )
-        new_size = (self.input_size[1:] - kernel_size + 2 * padding) // stride + 1
+        new_size = (self._input_dim[1:] - kernel_size + 2 * padding) // stride + 1
         self.conv2 = nn.Conv2d(
             channels,
             channels,
@@ -286,16 +295,15 @@ class ScalarResnet(Model):
             **kwargs
         )
 
-        self.input_dim = (1, 32, 32)
+        self._input_dim = (1, 32, 32)
         self.num_classes = num_classes
-        self.N = self.input_dim[0] * self.input_dim[1] * self.input_dim[2]
         self.D = max(self._resnet.fc.weight.data.shape)
         self.K = 1
 
         # Two tricks to get better accuracy, taken from Joost van Amersfoort
         # https://gist.github.com/y0ast/d91d09565462125a1eb75acc65da1469
         self._resnet.conv1 = torch.nn.Conv2d(
-            self.input_dim[0], 64, kernel_size=3, stride=1, padding=1, bias=False
+            self._input_dim[0], 64, kernel_size=3, stride=1, padding=1, bias=False
         )
         self._resnet.maxpool = torch.nn.Identity()
 

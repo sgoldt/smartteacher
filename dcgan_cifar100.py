@@ -17,13 +17,14 @@ import torchvision.utils as vutils
 # python dcgan.py --dataset cifar100 --dataroot /scratch/users/vision/yu_dl/raaz.rsk/data/cifar100 --imageSize 32 --cuda --outf samples --manualSeed 13 --niter 300
 # python dcgan.py --dataset cifar100 --dataroot /scratch/users/vision/yu_dl/raaz.rsk/data/cifar100 --imageSize 64 --cuda --outf samples_rect --manualSeed 13 --niter 300
 
+
 class Generator(nn.Module):
     def __init__(self, ngpu, nc=1, nz=100, ngf=64):
         super(Generator, self).__init__()
         self.ngpu = ngpu
         self.main = nn.Sequential(
             # input is Z, going into a convolution
-            nn.ConvTranspose2d(     nz, ngf * 8, 4, 1, 0, bias=False),
+            nn.ConvTranspose2d(nz, ngf * 8, 4, 1, 0, bias=False),
             nn.BatchNorm2d(ngf * 8),
             nn.ReLU(True),
             # state size. (ngf*8) x 4 x 4
@@ -35,11 +36,11 @@ class Generator(nn.Module):
             nn.BatchNorm2d(ngf * 2),
             nn.ReLU(True),
             # state size. (ngf*2) x 16 x 16
-            nn.ConvTranspose2d(ngf * 2,     ngf, 4, 2, 1, bias=False),
+            nn.ConvTranspose2d(ngf * 2, ngf, 4, 2, 1, bias=False),
             nn.BatchNorm2d(ngf),
             nn.ReLU(True),
-            nn.ConvTranspose2d(    ngf,      nc, kernel_size=1, stride=1, padding=0, bias=False),
-            nn.Tanh()
+            nn.ConvTranspose2d(ngf, nc, kernel_size=1, stride=1, padding=0, bias=False),
+            nn.Tanh(),
         )
 
     def forward(self, input):
@@ -72,7 +73,7 @@ class Discriminator(nn.Module):
             nn.LeakyReLU(0.2, inplace=True),
             # state size. (ndf*8) x 4 x 4
             nn.Conv2d(ndf * 8, 1, 2, 2, 0, bias=False),
-            nn.Sigmoid()
+            nn.Sigmoid(),
         )
 
     def forward(self, input):
@@ -82,14 +83,15 @@ class Discriminator(nn.Module):
             output = self.main(input)
 
         return output.view(-1, 1).squeeze(1)
-    
+
+
 class Generator_rect(nn.Module):
     def __init__(self, ngpu, nc=1, nz=100, ngf=64):
         super(Generator_rect, self).__init__()
         self.ngpu = ngpu
         self.main = nn.Sequential(
             # input is Z, going into a convolution
-            nn.ConvTranspose2d(     nz, ngf * 8, 4, 1, 0, bias=False),
+            nn.ConvTranspose2d(nz, ngf * 8, 4, 1, 0, bias=False),
             nn.BatchNorm2d(ngf * 8),
             nn.ReLU(True),
             # state size. (ngf*8) x 4 x 4
@@ -101,12 +103,26 @@ class Generator_rect(nn.Module):
             nn.BatchNorm2d(ngf * 2),
             nn.ReLU(True),
             # state size. (ngf*2) x 16 x 16
-            nn.ConvTranspose2d(ngf * 2,     ngf, kernel_size=(5, 5), stride=(2, 3), padding=(1, 2), bias=False),
+            nn.ConvTranspose2d(
+                ngf * 2,
+                ngf,
+                kernel_size=(5, 5),
+                stride=(2, 3),
+                padding=(1, 2),
+                bias=False,
+            ),
             nn.BatchNorm2d(ngf),
             nn.ReLU(True),
             # state size. (ngf) x 32 x 32
-            nn.ConvTranspose2d(in_channels=ngf, out_channels=nc, kernel_size=(4, 4), stride=(1, 1), padding=(1, 2), bias=False),
-            nn.Tanh() # bigger padding -> smaller dim, bigger kernel -> bigger dim
+            nn.ConvTranspose2d(
+                in_channels=ngf,
+                out_channels=nc,
+                kernel_size=(4, 4),
+                stride=(1, 1),
+                padding=(1, 2),
+                bias=False,
+            ),
+            nn.Tanh()  # bigger padding -> smaller dim, bigger kernel -> bigger dim
             # state size. (nc) x 64 x 64
         )
 
@@ -115,9 +131,10 @@ class Generator_rect(nn.Module):
             output = nn.parallel.data_parallel(self.main, input, range(self.ngpu))
         else:
             output = self.main(input)
-#         print('G', output.shape)
+        #         print('G', output.shape)
         return output
-    
+
+
 class Discriminator_rect(nn.Module):
     def __init__(self, ngpu, nc=1, ndf=64):
         super(Discriminator_rect, self).__init__()
@@ -139,8 +156,15 @@ class Discriminator_rect(nn.Module):
             nn.BatchNorm2d(ndf * 8),
             nn.LeakyReLU(0.2, inplace=True),
             # state size. (ndf*8) x 4 x 4
-            nn.Conv2d(in_channels=ndf * 8, out_channels=1, kernel_size=2, stride=1, padding=0, bias=False),
-            nn.Sigmoid()
+            nn.Conv2d(
+                in_channels=ndf * 8,
+                out_channels=1,
+                kernel_size=2,
+                stride=1,
+                padding=0,
+                bias=False,
+            ),
+            nn.Sigmoid(),
         )
 
     def forward(self, input):
@@ -148,29 +172,55 @@ class Discriminator_rect(nn.Module):
             output = nn.parallel.data_parallel(self.main, input, range(self.ngpu))
         else:
             output = self.main(input)
-#         print('D', output.shape)
+        #         print('D', output.shape)
         return output.view(-1, 1).squeeze(1)
-    
-if __name__ == '__main__':    
+
+
+if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset', required=True, help='cifar10 | lsun | mnist |imagenet | folder | lfw | fake')
-    parser.add_argument('--dataroot', required=True, help='path to dataset')
-    parser.add_argument('--workers', type=int, help='number of data loading workers', default=2)
-    parser.add_argument('--batchSize', type=int, default=64, help='input batch size')
-    parser.add_argument('--imageSize', type=int, default=32, help='the height / width of the input image to network')
-    parser.add_argument('--nz', type=int, default=100, help='size of the latent z vector')
-    parser.add_argument('--ngf', type=int, default=64)
-    parser.add_argument('--ndf', type=int, default=64)
-    parser.add_argument('--niter', type=int, default=25, help='number of epochs to train for')
-    parser.add_argument('--lr', type=float, default=0.0002, help='learning rate, default=0.0002')
-    parser.add_argument('--beta1', type=float, default=0.5, help='beta1 for adam. default=0.5')
-    parser.add_argument('--cuda', action='store_true', help='enables cuda')
-    parser.add_argument('--ngpu', type=int, default=1, help='number of GPUs to use')
-    parser.add_argument('--netG', default='', help="path to netG (to continue training)")
-    parser.add_argument('--netD', default='', help="path to netD (to continue training)")
-    parser.add_argument('--outf', default='.', help='folder to output images and model checkpoints')
-    parser.add_argument('--manualSeed', type=int, help='manual seed')
+    parser.add_argument(
+        "--dataset",
+        required=True,
+        help="cifar10 | lsun | mnist |imagenet | folder | lfw | fake",
+    )
+    parser.add_argument("--dataroot", required=True, help="path to dataset")
+    parser.add_argument(
+        "--workers", type=int, help="number of data loading workers", default=2
+    )
+    parser.add_argument("--batchSize", type=int, default=64, help="input batch size")
+    parser.add_argument(
+        "--imageSize",
+        type=int,
+        default=32,
+        help="the height / width of the input image to network",
+    )
+    parser.add_argument(
+        "--nz", type=int, default=100, help="size of the latent z vector"
+    )
+    parser.add_argument("--ngf", type=int, default=64)
+    parser.add_argument("--ndf", type=int, default=64)
+    parser.add_argument(
+        "--niter", type=int, default=25, help="number of epochs to train for"
+    )
+    parser.add_argument(
+        "--lr", type=float, default=0.0002, help="learning rate, default=0.0002"
+    )
+    parser.add_argument(
+        "--beta1", type=float, default=0.5, help="beta1 for adam. default=0.5"
+    )
+    parser.add_argument("--cuda", action="store_true", help="enables cuda")
+    parser.add_argument("--ngpu", type=int, default=1, help="number of GPUs to use")
+    parser.add_argument(
+        "--netG", default="", help="path to netG (to continue training)"
+    )
+    parser.add_argument(
+        "--netD", default="", help="path to netD (to continue training)"
+    )
+    parser.add_argument(
+        "--outf", default=".", help="folder to output images and model checkpoints"
+    )
+    parser.add_argument("--manualSeed", type=int, help="manual seed")
 
     opt = parser.parse_args()
     print(opt)
@@ -193,18 +243,24 @@ if __name__ == '__main__':
 
     if opt.imageSize != 32:
         opt.imageSize = (34, 45)
-    dataset = dset.CIFAR100(root=opt.dataroot, download=True,
-                           transform=transforms.Compose([
-                               transforms.Grayscale(),
-                               transforms.Resize(opt.imageSize),
-                               transforms.ToTensor(),
-                               transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-                           ]))
-    nc=1
+    dataset = dset.CIFAR100(
+        root=opt.dataroot,
+        download=True,
+        transform=transforms.Compose(
+            [
+                transforms.Grayscale(),
+                transforms.Resize(opt.imageSize),
+                transforms.ToTensor(),
+                transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+            ]
+        ),
+    )
+    nc = 1
 
     assert dataset
-    dataloader = torch.utils.data.DataLoader(dataset, batch_size=opt.batchSize,
-                                             shuffle=True, num_workers=int(opt.workers))
+    dataloader = torch.utils.data.DataLoader(
+        dataset, batch_size=opt.batchSize, shuffle=True, num_workers=int(opt.workers)
+    )
 
     device = torch.device("cuda:0" if opt.cuda else "cpu")
     ngpu = int(opt.ngpu)
@@ -212,31 +268,29 @@ if __name__ == '__main__':
     ngf = int(opt.ngf)
     ndf = int(opt.ndf)
 
-
     # custom weights initialization called on netG and netD
     def weights_init(m):
         classname = m.__class__.__name__
-        if classname.find('Conv') != -1:
+        if classname.find("Conv") != -1:
             m.weight.data.normal_(0.0, 0.02)
-        elif classname.find('BatchNorm') != -1:
+        elif classname.find("BatchNorm") != -1:
             m.weight.data.normal_(1.0, 0.02)
             m.bias.data.fill_(0)
 
     if opt.imageSize == 32:
         netG = Generator(ngpu).to(device)
         netD = Discriminator(ngpu).to(device)
-        
+
     else:
         netG = Generator_rect(ngpu).to(device)
-        netD = Discriminator_rect(ngpu).to(device) 
+        netD = Discriminator_rect(ngpu).to(device)
     netG.apply(weights_init)
-    if opt.netG != '':
+    if opt.netG != "":
         netG.load_state_dict(torch.load(opt.netG))
     print(netG)
 
-
     netD.apply(weights_init)
-    if opt.netD != '':
+    if opt.netD != "":
         netD.load_state_dict(torch.load(opt.netD))
     print(netD)
 
@@ -260,7 +314,7 @@ if __name__ == '__main__':
             real_cpu = data[0].to(device)
             batch_size = real_cpu.size(0)
             label = torch.full((batch_size,), real_label, device=device)
-#             print('data', real_cpu.shape)
+            #             print('data', real_cpu.shape)
 
             output = netD(real_cpu)
             errD_real = criterion(output, label)
@@ -289,18 +343,31 @@ if __name__ == '__main__':
             D_G_z2 = output.mean().item()
             optimizerG.step()
 
-            print('[%d/%d][%d/%d] Loss_D: %.4f Loss_G: %.4f D(x): %.4f D(G(z)): %.4f / %.4f'
-                  % (epoch, opt.niter, i, len(dataloader),
-                     errD.item(), errG.item(), D_x, D_G_z1, D_G_z2))
+            print(
+                "[%d/%d][%d/%d] Loss_D: %.4f Loss_G: %.4f D(x): %.4f D(G(z)): %.4f / %.4f"
+                % (
+                    epoch,
+                    opt.niter,
+                    i,
+                    len(dataloader),
+                    errD.item(),
+                    errG.item(),
+                    D_x,
+                    D_G_z1,
+                    D_G_z2,
+                )
+            )
             if i % 100 == 0:
-                vutils.save_image(real_cpu,
-                        '%s/real_samples.png' % opt.outf,
-                        normalize=True)
+                vutils.save_image(
+                    real_cpu, "%s/real_samples.png" % opt.outf, normalize=True
+                )
                 fake = netG(fixed_noise)
-                vutils.save_image(fake.detach(),
-                        '%s/fake_samples_epoch_%03d.png' % (opt.outf, epoch),
-                        normalize=True)
+                vutils.save_image(
+                    fake.detach(),
+                    "%s/fake_samples_epoch_%03d.png" % (opt.outf, epoch),
+                    normalize=True,
+                )
 
         # do checkpointing
-        torch.save(netG.state_dict(), '%s/netG_epoch_%d.pth' % (opt.outf, epoch))
-        torch.save(netD.state_dict(), '%s/netD_epoch_%d.pth' % (opt.outf, epoch))
+        torch.save(netG.state_dict(), "%s/netG_epoch_%d.pth" % (opt.outf, epoch))
+        torch.save(netD.state_dict(), "%s/netD_epoch_%d.pth" % (opt.outf, epoch))
