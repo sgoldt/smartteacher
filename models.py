@@ -20,6 +20,15 @@ SQRT2 = 1.414213562
 SQRT2OVERPI = 0.797884560802865
 
 
+def linear(x):
+    """
+    Re-scaled error function activation function.
+
+    Useful to make the connection with an ODE description.
+    """
+    return x
+
+
 def erfscaled(x):
     """
     Re-scaled error function activation function.
@@ -27,15 +36,6 @@ def erfscaled(x):
     Useful to make the connection with an ODE description.
     """
     return torch.erf(x / SQRT2)
-
-
-def dgdx_erfscaled(x):
-    """
-    Re-scaled error function activation function.
-
-    Useful to make the connection with an ODE description.
-    """
-    return SQRT2OVERPI * torch.exp(-(x ** 2) / 2)
 
 
 class Model(nn.Module, metaclass=ABCMeta):
@@ -70,7 +70,7 @@ class Model(nn.Module, metaclass=ABCMeta):
         Computes the output of the network.
         """
         x = self.nu(x)
-        x = erfscaled(x)
+        x = self.g(x)
         x = self.v(x)
         return x
 
@@ -87,7 +87,7 @@ class Model(nn.Module, metaclass=ABCMeta):
         Computes the pre-activation of the last hidden layer and the network's output.
         """
         nu = self.nu(x)
-        y = erfscaled(nu)
+        y = self.g(nu)
         y = self.v(y)
         return nu, y
 
@@ -109,7 +109,7 @@ class TwoLayer(Model):
 
     requires_2d_input = False
 
-    def __init__(self, N, K, std0w=None, std0v=None):
+    def __init__(self, g, N, K, std0w=None, std0v=None):
         """
         Parameters:
         -----------
@@ -122,6 +122,7 @@ class TwoLayer(Model):
            std dev of the initial SECOND-layer (Gaussian) weights.
         """
         super().__init__()
+        self.g = g
         self._input_dim = N
         self.D = N
         self.K = K
@@ -189,66 +190,45 @@ class MLP(Model):
 
 
 class ConvNet(Model):
-    """
-    Convolutional network with three convolutions,
-    followed by a fully-connected layer.
+    """Simple convolutional network.
+
+    The architecture and the pre-processing of the network are taken from the pyTorch
+    tutorial:
+    https://pytorch.org/tutorials/beginner/blitz/cifar10_tutorial.html#sphx-glr-beginner-blitz-cifar10-tutorial-py
     """
 
     requires_2d_input = True
 
-    def __init__(
-        self,
-        g,
-        K,
-        input_dim=[1, 32, 32],
-        kernel_size=3,
-        channels=1,
-        stride=1,
-        padding=0,
-    ):
-        """
-        Parameters:
-        -----------
-
-        N : input dimension
-        K : number of hidden nodes
-        """
+    def __init__(self, g, K, input_dim=[3, 32, 32]):
         super().__init__()
+
         self.K = K
         self.g = g
 
-        self._input_dim = torch.tensor(input_dim)
-        self.channels = channels
+        self.network = nn.Sequential(
+            nn.Conv2d(3, 32, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d(3, 3),  # output: 64 x 8 x 8
+            nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(128, 128, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d(2, 2),  # output: 128 x 5 x 5
+            nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d(2, 2),  # output: 256 x 2 x 2
+            nn.Flatten(),
+            nn.Linear(256 * 2 * 2, 1024),
+            nn.ReLU(),
+            nn.Linear(1024, 784),
+            nn.ReLU(),
+        )
 
-        self.conv1 = nn.Conv2d(
-            self._input_dim[0],
-            channels,
-            kernel_size=kernel_size,
-            stride=stride,
-            padding=padding,
-            bias=False,
-        )
-        new_size = (self._input_dim[1:] - kernel_size + 2 * padding) // stride + 1
-        self.conv2 = nn.Conv2d(
-            channels,
-            channels,
-            kernel_size=kernel_size,
-            stride=stride,
-            padding=padding,
-            bias=False,
-        )
-        new_size = (new_size - kernel_size + 2 * padding) // stride + 1
-        self.conv3 = nn.Conv2d(
-            channels,
-            channels,
-            kernel_size=kernel_size,
-            stride=stride,
-            padding=padding,
-            bias=False,
-        )
-        new_size = (new_size - kernel_size + 2 * padding) // stride + 1
-
-        self.D = int(channels * torch.prod(new_size))
+        self.D = 784
 
         # add a batch-norm layer before the last fully connected layer
         self.bnz = nn.BatchNorm1d(self.D, affine=False, track_running_stats=False)
@@ -260,17 +240,14 @@ class ConvNet(Model):
         nn.init.normal_(self.v.weight, mean=0.0, std=1)
 
         self._norm_second_layer()
+        self.v.requires_grad = False
 
     def preprocess(self, x):
         """
         Propagates the given inputs x through the MLP until we hit the fully-connected
         layer that projects things down to the M classes.
         """
-        x = F.relu(self.conv1(x))
-        x = F.relu(self.conv2(x))
-        x = F.relu(self.conv3(x))
-
-        x = x.reshape(-1, self.D)
+        x = self.network(x)
 
         x = self.bnz(x)  # an additional BatchNorm layer to ensure that z has zero mean
 

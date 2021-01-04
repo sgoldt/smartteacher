@@ -17,7 +17,7 @@ import torch
 import torch.nn.functional as F
 
 from dcgan_cifar10 import Generator
-from models import ScalarResnet, TwoLayer, ConvNet, MLP
+from models import erfscaled, TwoLayer
 import utils
 
 
@@ -188,7 +188,8 @@ def main():
     )
 
     # initialise the student to guarantee the random weights for the given seed
-    student = TwoLayer(N, args.K, std0w=1e-1, std0v=1e-2).to(device)
+    g = erfscaled  # student activation function
+    student = TwoLayer(g, N, args.K, std0w=1e-1, std0v=1e-2).to(device)
 
     welcome = "# Checking the GEP for (x=%s, y=%s)\n" % (args.generator, args.teacher)
     welcome += "# Using device: %s\n" % str(device)
@@ -210,7 +211,7 @@ def main():
     elif args.generator == "iid":
         get_samples = _get_samples_iid
     else:
-        raise ValueError("Wrong generator name (%s)" % generators)
+        raise ValueError("Wrong generator name (%s)" % utils.generators)
 
     if generator is None:
         mean_x = torch.zeros(N)
@@ -221,10 +222,10 @@ def main():
         mean_x = torch.load(fname, map_location=device)
 
     # teacher
-    M = {"twolayer": 2 * args.K, "mlp": 1, "convnet": 2 * args.K, "resnet18": 1}[
+    M = {"twolayer": 2 * args.K, "mlp": 1, "convnet": 1, "resnet18": 1}[
         args.teacher
     ]
-    teacher = utils.get_teacher(
+    teacher = utils.get_model(
         args.teacher, N, M
     )
     teacher_weights_fname = "rand"

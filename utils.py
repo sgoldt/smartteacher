@@ -10,10 +10,11 @@ import os
 import torch
 from torchvision import datasets, transforms
 
-from models import ScalarResnet, TwoLayer, ConvNet, MLP
+import models
 
 teachers = "twolayer | mlp | convnet | resnet18"
 generators = "iid | dcgan_rand | dcgan_cifar100_grey"
+
 
 class IdentityTransform(torch.nn.Module):
     """Dummy image transform that doesn't do anything.
@@ -40,15 +41,18 @@ class IdentityTransform(torch.nn.Module):
 
 
 def binarise(x):
+    """
+    Transform class labels into binary labels in polar encoding (-1, 1).
+    """
     x = 2 * (x % 2) - 1
     return x
 
+
 def I2_erf(c00, c01, c11):
+    """
+    Analytical result for the integral E g(u) g(v) for correlated Gaussian variables u, v
+    """
     return 2.0 / math.pi * torch.asin(c01 / (math.sqrt(1 + c00) * math.sqrt(1 + c11)))
-
-
-def erfscaled(x):
-    return torch.erf(x / math.sqrt(2))
 
 
 def get_eg_analytical(Q, R, T, A, v):
@@ -79,24 +83,22 @@ def get_eg_analytical(Q, R, T, A, v):
     return eg_analytical / math.pi
 
 
-def get_teacher(name, N, M):
+def get_model(name, N, M, **kwargs):
     """
-    Load a teacher with the given name. If pretrained is not None, will try to preload
-    the dataset name given.
+    Load a model with the given name.
 
     name : twolayer | mlp | convnet | resnet18
-    pretrained_on : rand | cifar100
     """
     teacher = None
     if name == "twolayer":
-        teacher = TwoLayer(N, M, std0w=1, std0v=1)
+        teacher = models.TwoLayer(models.erfscaled, N, M, std0w=1, std0v=1)
     elif name == "mlp":
         teacher = MLP(N, M)
     elif name == "convnet":
-        teacher = ConvNet(erfscaled, M)
+        teacher = models.ConvNet(models.erfscaled, M, **kwargs)
     elif name == "resnet18":
         num_classes = 1
-        teacher = ScalarResnet(num_classes)
+        teacher = models.ScalarResnet(num_classes)
     else:
         raise ValueError("Did not recognise the teacher description.")
 
@@ -122,7 +124,9 @@ def get_dataset(root, name="cifar10", grayscale=False):
     )
 
     try:
-        dataset_object = {"cifar10": datasets.CIFAR10, "cifar100": datasets.CIFAR100}[name]
+        dataset_object = {"cifar10": datasets.CIFAR10, "cifar100": datasets.CIFAR100}[
+            name
+        ]
     except KeyError as key_error:
         raise ValueError("Don't know about dataset %s." % name) from key_error
 

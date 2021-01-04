@@ -125,9 +125,11 @@ def main():
         test_dataset, batch_size=2000, shuffle=False, **kwargs
     )
 
-    N = 32 * 32 * (1 if args.grayscale else 3)
+    num_channels = 1 if args.grayscale else 3
+    N = 32 * 32 * num_channels
     M = {"twolayer": args.M, "mlp": args.M, "convnet": args.M, "resnet18": 1}[args.teacher]
-    model = utils.get_teacher(args.teacher, N, M, device=device)
+    kwargs = {"input_dim": [num_channels, 32, 32]}
+    model = utils.get_model(args.teacher, N, M, **kwargs)
     model = model.to(device)
 
     # output file + welcome message
