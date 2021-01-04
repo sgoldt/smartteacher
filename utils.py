@@ -79,7 +79,7 @@ def get_eg_analytical(Q, R, T, A, v):
     return eg_analytical / math.pi
 
 
-def get_teacher(name, N, M, pretrained_on=None, device="cpu"):
+def get_teacher(name, N, M):
     """
     Load a teacher with the given name. If pretrained is not None, will try to preload
     the dataset name given.
@@ -99,11 +99,6 @@ def get_teacher(name, N, M, pretrained_on=None, device="cpu"):
         teacher = ScalarResnet(num_classes)
     else:
         raise ValueError("Did not recognise the teacher description.")
-
-    if pretrained_on is not None:
-        teacher.load_state_dict(
-            torch.load("./models/%s_%s.pt" % (name, pretrained_on), map_location=device)
-        )
 
     return teacher
 

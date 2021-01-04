@@ -16,7 +16,7 @@ from tqdm import trange
 import torch
 import torch.nn.functional as F
 
-from dcgan_cifar100 import Generator
+from dcgan_cifar10 import Generator
 from models import ScalarResnet, TwoLayer, ConvNet, MLP
 import utils
 
@@ -48,7 +48,7 @@ def eval_student(time, teacher, student, test_loader, test_xs, test_nus, device)
 
         # Calculate the test error using an analytical formula assuming joint Gaussianity
         # of (lambda, nu)
-        lambdas = test_xs @ w.T / math.sqrt(student.N)
+        lambdas = test_xs @ w.T / math.sqrt(student.input_dim)
         # nus are given to this method
         Q_mc = lambdas.T @ lambdas / P
         R_mc = lambdas.T @ test_nus / P
@@ -155,7 +155,10 @@ def main():
     seed_help = "random number generator seed."
     parser = argparse.ArgumentParser()
     parser.add_argument("--teacher", default="twolayer", help=utils.teachers)
-    parser.add_argument("--generator", default="dcgan_cifar100_grey", help=utils.generators)
+    parser.add_argument(
+        "--dataset", default="rand", help="teacher weights: rand | cifar10"
+    )
+    parser.add_argument("--generator", default="dcgan_cifar10", help=utils.generators)
     parser.add_argument("--K", type=int, default=2, help=steps_help)
     parser.add_argument("--lr", type=float, default=0.01, help=lr_help)
     parser.add_argument("--bs", type=int, default=4096, help=bs_help)
@@ -174,7 +177,15 @@ def main():
 
     # D: generator input dimension
     # N: generator output dimension, student input
-    (D, N, M, K, lr, seed) = (100, 1 * 32 * 32, 1, args.K, args.lr, args.seed)
+    num_channels = 1 if ("gray" in args.dataset) else 3
+    (D, N, M, K, lr, seed) = (
+        100,
+        num_channels * 32 * 32,
+        1,
+        args.K,
+        args.lr,
+        args.seed,
+    )
 
     # initialise the student to guarantee the random weights for the given seed
     student = TwoLayer(N, args.K, std0w=1e-1, std0v=1e-2).to(device)
@@ -206,21 +217,42 @@ def main():
     else:
         generator.eval()
         generator.to(device)
-        mean_x = torch.load("models/%s_mean_x.pth" % args.generator)
+        fname = "models/%s_mean_x.pth" % args.generator
+        mean_x = torch.load(fname, map_location=device)
 
     # teacher
-    M = {"twolayer": 2 * args.K, "convnet": 2 * args.K, "resnet18": 1}[args.teacher]
-    teacher = utils.get_teacher(args.teacher, N, M, device=device)
+    M = {"twolayer": 2 * args.K, "mlp": 1, "convnet": 2 * args.K, "resnet18": 1}[
+        args.teacher
+    ]
+    teacher = utils.get_teacher(
+        args.teacher, N, M
+    )
+    teacher_weights_fname = "rand"
+    if args.dataset != "rand":
+        teacher_weights_fname = "./models/%s_%s.pth" % (args.teacher, args.dataset)
+        teacher.load_state_dict(
+            torch.load(teacher_weights_fname, map_location=device)
+        )
+    welcome += "# Teacher weights: %s\n" % teacher_weights_fname
     teacher.to(device)
     teacher.freeze()
     teacher.eval()
 
     # output file + welcome message
-    fname_root = "%s_%s_K%d_lr%g_s%d" % (args.generator, args.teacher, K, lr, seed)
+    dataset_desc = "rand" if args.dataset is None else args.dataset
+    fname_root = "%s_%s_K%d_%s_lr%g_s%d" % (
+        args.generator,
+        args.teacher,
+        K,
+        dataset_desc,
+        lr,
+        seed,
+    )
     logfile = open(fname_root + ".log", "w", buffering=1)
-    welcome += "# Teacher and Student:"
-    for net in [teacher, student]:
-        welcome += "\n# " + str(net).replace("\n", "\n# ")
+    welcome += "# Generator, teacher and Student:"
+    for net in [generator, teacher, student]:
+        if net is not None:
+            welcome += "\n# " + str(net).replace("\n", "\n# ")
     log(welcome, logfile)
 
     # Generate the test set

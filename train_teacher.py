@@ -152,8 +152,8 @@ def main():
     )
 
     for epoch in range(1, args.epochs + 1):
-        train(model, train_loader, optimizer, epoch, logfile, device)
         test(model, test_loader, logfile, device)
+        train(model, train_loader, optimizer, epoch, logfile, device)
 
         scheduler.step()
 
