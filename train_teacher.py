@@ -27,7 +27,7 @@ def train(model, train_loader, optimizer, epoch, logfile, device):
         target = target.to(device).unsqueeze(-1)
 
         if not model.requires_2d_input:
-            data = data.reshape(-1, model.input_dim)
+            data = data.view(-1, model.input_dim)
 
         optimizer.zero_grad()
 
@@ -56,7 +56,7 @@ def test(model, test_loader, logfile, device):
             target = target.to(device).unsqueeze(-1)
 
             if not model.requires_2d_input:
-                data = data.reshape(-1, model.input_dim)
+                data = data.view(-1, model.input_dim)
 
             prediction = model(data)
             loss += F.mse_loss(prediction, target.float(), reduction="sum")
@@ -114,7 +114,9 @@ def main():
     else:
         device = torch.device(args.device)
 
-    train_dataset, test_dataset = utils.get_dataset(args.dataroot, name=args.dataset, grayscale=args.grayscale)
+    train_dataset, test_dataset = utils.get_dataset(
+        args.dataroot, name=args.dataset, grayscale=args.grayscale
+    )
 
     kwargs = {"num_workers": 2, "pin_memory": True}
 
@@ -127,7 +129,9 @@ def main():
 
     num_channels = 1 if args.grayscale else 3
     N = 32 * 32 * num_channels
-    M = {"twolayer": args.M, "mlp": args.M, "convnet": args.M, "resnet18": 1}[args.teacher]
+    M = {"twolayer": args.M, "mlp": args.M, "convnet": args.M, "resnet18": 1}[
+        args.teacher
+    ]
     kwargs = {"input_dim": [num_channels, 32, 32]}
     model = utils.get_model(args.teacher, N, M, **kwargs)
     model = model.to(device)

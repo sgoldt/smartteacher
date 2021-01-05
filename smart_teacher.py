@@ -97,10 +97,10 @@ def _get_samples_dcgan(P, D, N, generator, teacher, mean_x, device):
         if teacher.requires_2d_input:
             # let the teacher act on the 2-D images
             nus, ys = teacher.nu_y(xs)
-            xs = xs.reshape(-1, N)
+            xs = xs.view(-1, N)
             xs -= mean_x
         else:
-            xs = xs.reshape(-1, N)
+            xs = xs.view(-1, N)
             xs -= mean_x
             nus, ys = teacher.nu_y(xs)
 
@@ -122,14 +122,15 @@ def _get_samples_iid(P, D, N, generator, teacher, mean_x, device):
     mean_x : the mean of the generator's output
     """
     with torch.no_grad():
+        # inputs in right shape for the student
         xs = torch.randn(P, N).to(device)
+
         if teacher.requires_2d_input:
             # let the teacher act on the 2-D images
-            xs = xs.reshape(-1, 1, 32, 32)
+            xs = xs.view(-1, *teacher.input_dim)
             nus, ys = teacher.nu_y(xs)
-            xs = xs.reshape(-1, N)
+            xs = xs.view(-1, N)
         else:
-            xs = xs.reshape(-1, N)
             nus, ys = teacher.nu_y(xs)
 
         return None, xs, nus, ys
@@ -155,8 +156,9 @@ def main():
     seed_help = "random number generator seed."
     parser = argparse.ArgumentParser()
     parser.add_argument("--teacher", default="twolayer", help=utils.teachers)
+    parser.add_argument("--dataset", default="cifar10", help="rand | cifar10")
     parser.add_argument(
-        "--dataset", default="rand", help="teacher weights: rand | cifar10"
+        "--grayscale", help="transform images to grayscale", action="store_true"
     )
     parser.add_argument("--generator", default="dcgan_cifar10", help=utils.generators)
     parser.add_argument("--K", type=int, default=2, help=steps_help)
@@ -222,18 +224,12 @@ def main():
         mean_x = torch.load(fname, map_location=device)
 
     # teacher
-    M = {"twolayer": 2 * args.K, "mlp": 1, "convnet": 1, "resnet18": 1}[
-        args.teacher
-    ]
-    teacher = utils.get_model(
-        args.teacher, N, M
-    )
+    M = {"twolayer": 2 * args.K, "mlp": 1, "convnet": 1, "resnet18": 1}[args.teacher]
+    teacher = utils.get_model(args.teacher, N, M)
     teacher_weights_fname = "rand"
     if args.dataset != "rand":
         teacher_weights_fname = "./models/%s_%s.pth" % (args.teacher, args.dataset)
-        teacher.load_state_dict(
-            torch.load(teacher_weights_fname, map_location=device)
-        )
+        teacher.load_state_dict(torch.load(teacher_weights_fname, map_location=device))
     welcome += "# Teacher weights: %s\n" % teacher_weights_fname
     teacher.to(device)
     teacher.freeze()

@@ -14,7 +14,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from models import ScalarResnet, erfscaled, dgdx_erfscaled
+from models import ScalarResnet, erfscaled
 
 
 def explicit_forward(student, Ds, inputs):
@@ -52,11 +52,10 @@ class ScalarResnetTests(unittest.TestCase):
         bs = 4
         num_classes = 1
 
-        student = ScalarResnet(num_classes)
+        student = ScalarResnet(erfscaled, num_classes)
 
         with torch.no_grad():
             xs = torch.randn((bs,) + student.input_dim)
-            print("Calling student")
             ys = student(xs)
 
             w = student.fc.weight.data
@@ -67,14 +66,14 @@ class ScalarResnetTests(unittest.TestCase):
             glambdas = erfscaled(lambdas)
             explicit_ys = v @ glambdas
 
-        diff = torch.sum((ys - explicit_ys.T)**2) / torch.sum(ys**2)
+        diff = torch.sum((ys - explicit_ys.T) ** 2) / torch.sum(ys ** 2)
         self.assertTrue(diff.item() < 1e-6)
 
     def test_preprocess_block0(self):
         bs = 128
         num_classes = 1
 
-        student = ScalarResnet(num_classes)
+        student = ScalarResnet(erfscaled, num_classes)
 
         with torch.no_grad():
             xs = torch.randn((bs,) + student.input_dim)
@@ -105,7 +104,7 @@ class ScalarResnetTests(unittest.TestCase):
         bs = 128
         num_classes = 3
 
-        student = ScalarResnet(num_classes)
+        student = ScalarResnet(erfscaled, num_classes)
 
         with torch.no_grad():
             xs = torch.randn((bs,) + student.input_dim)
@@ -136,7 +135,7 @@ class ScalarResnetTests(unittest.TestCase):
         bs = 128
         num_classes = 3
 
-        student = ScalarResnet(num_classes)
+        student = ScalarResnet(erfscaled, num_classes)
 
         with torch.no_grad():
             xs = torch.randn((bs,) + student.input_dim)

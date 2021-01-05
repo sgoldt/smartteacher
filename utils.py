@@ -93,7 +93,7 @@ def get_model(name, N, M, **kwargs):
     if name == "twolayer":
         teacher = models.TwoLayer(models.erfscaled, N, M, std0w=1, std0v=1)
     elif name == "mlp":
-        teacher = MLP(N, M)
+        teacher = models.MLP(models.erfscaled, N, M)
     elif name == "convnet":
         teacher = models.ConvNet(models.erfscaled, M, **kwargs)
     elif name == "resnet18":

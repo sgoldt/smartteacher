@@ -148,7 +148,7 @@ class MLP(Model):
 
     requires_2d_input = False
 
-    def __init__(self, N, K):
+    def __init__(self, g, N, K):
         """
         Parameters:
         -----------
@@ -158,6 +158,7 @@ class MLP(Model):
         """
         super().__init__()
         self._input_dim = N
+        self.g = g
         self.D = N
         self.K = K
 
@@ -202,6 +203,7 @@ class ConvNet(Model):
     def __init__(self, g, K, input_dim=[3, 32, 32]):
         super().__init__()
 
+        self._input_dim = input_dim
         self.K = K
         self.g = g
 
@@ -261,7 +263,7 @@ class ScalarResnet(Model):
 
     requires_2d_input = True
 
-    def __init__(self, num_classes=1, **kwargs):
+    def __init__(self, g, num_classes=1, **kwargs):
         super().__init__()
 
         # Create an instance of a resnet to have the pre-processing
@@ -274,6 +276,7 @@ class ScalarResnet(Model):
 
         self._input_dim = (1, 32, 32)
         self.num_classes = num_classes
+        self.g = g
         self.D = max(self._resnet.fc.weight.data.shape)
         self.K = 1
 
